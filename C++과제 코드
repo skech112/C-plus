@@ -1,0 +1,201 @@
+#include "raylib.h"
+
+// --- 설정 상수 ---
+const int SQUARE_SIZE = 20;
+const int GRID_HORIZONTAL_SIZE = 12;
+const int GRID_VERTICAL_SIZE = 20;
+const int GRAVITY_SPEED = 30;
+
+enum class GridSquare { EMPTY, MOVING, FULL, BLOCK, FADING };
+
+class TetrisGame {
+private:
+    GridSquare grid[GRID_HORIZONTAL_SIZE][GRID_VERTICAL_SIZE];
+    GridSquare piece[4][4];
+    GridSquare nextPiece[4][4];
+
+    int posX, posY;
+    int lines = 0;
+    int gravityCounter = 0;
+    bool pieceActive = false;
+    bool gameOver = false;
+    bool isFading = false;
+    int fadeTimer = 0;
+
+    // 1. 그리드 초기화 (벽 생성)
+    void InitGrid() {
+        for (int i = 0; i < GRID_HORIZONTAL_SIZE; i++) {
+            for (int j = 0; j < GRID_VERTICAL_SIZE; j++) {
+                if (i == 0 || i == GRID_HORIZONTAL_SIZE - 1 || j == GRID_VERTICAL_SIZE - 1)
+                    grid[i][j] = GridSquare::BLOCK;
+                else
+                    grid[i][j] = GridSquare::EMPTY;
+            }
+        }
+    }
+
+    // 2. 랜덤 블록 생성
+    void GeneratePiece(GridSquare target[4][4]) {
+        int r = GetRandomValue(0, 6);
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) target[i][j] = GridSquare::EMPTY;
+        switch (r) {
+        case 0: target[1][1] = target[2][1] = target[1][2] = target[2][2] = GridSquare::MOVING; break; // O
+        case 1: target[1][0] = target[1][1] = target[1][2] = target[2][2] = GridSquare::MOVING; break; // L
+        case 2: target[1][2] = target[2][0] = target[2][1] = target[2][2] = GridSquare::MOVING; break; // J
+        case 3: target[0][1] = target[1][1] = target[2][1] = target[3][1] = GridSquare::MOVING; break; // I
+        case 4: target[1][0] = target[1][1] = target[1][2] = target[2][1] = GridSquare::MOVING; break; // T
+        case 5: target[1][1] = target[2][1] = target[2][2] = target[3][2] = GridSquare::MOVING; break; // S
+        case 6: target[1][2] = target[2][2] = target[2][1] = target[3][1] = GridSquare::MOVING; break; // Z
+        }
+    }
+
+    // 3. 충돌 검사 (벽, 바닥, 고정된 블록)
+    bool WillCollide(int nextX, int nextY, GridSquare p[4][4]) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                if (p[i][j] == GridSquare::MOVING) {
+                    int tx = nextX + i;
+                    int ty = nextY + j;
+                    if (tx < 0 || tx >= GRID_HORIZONTAL_SIZE || ty >= GRID_VERTICAL_SIZE ||
+                        grid[tx][ty] == GridSquare::BLOCK || grid[tx][ty] == GridSquare::FULL) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // 4. 블록을 그리드에 고정 (사라짐 방지 핵심!)
+    void LockPiece() {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                if (piece[i][j] == GridSquare::MOVING) {
+                    grid[posX + i][posY + j] = GridSquare::FULL;
+                }
+            }
+        }
+        pieceActive = false;
+        CheckLines();
+    }
+
+    // 5. 줄 삭제 체크
+    void CheckLines() {
+        for (int j = GRID_VERTICAL_SIZE - 2; j >= 0; j--) {
+            bool full = true;
+            for (int i = 1; i < GRID_HORIZONTAL_SIZE - 1; i++) {
+                if (grid[i][j] != GridSquare::FULL) { full = false; break; }
+            }
+            if (full) {
+                isFading = true;
+                for (int i = 1; i < GRID_HORIZONTAL_SIZE - 1; i++) grid[i][j] = GridSquare::FADING;
+            }
+        }
+    }
+
+    void ClearFullLines() {
+        for (int j = GRID_VERTICAL_SIZE - 2; j >= 0; j--) {
+            if (grid[1][j] == GridSquare::FADING) {
+                for (int k = j; k > 0; k--) {
+                    for (int i = 1; i < GRID_HORIZONTAL_SIZE - 1; i++) grid[i][k] = grid[i][k - 1];
+                }
+                lines++;
+                j++; // 다시 검사
+            }
+        }
+    }
+
+public:
+    TetrisGame() {
+        InitWindow(800, 450, "C++ Tetris - Fix Disappearing Bug");
+        SetTargetFPS(60);
+        InitGrid();
+        GeneratePiece(nextPiece);
+    }
+
+    void Update() {
+        if (gameOver) { if (IsKeyPressed(KEY_ENTER)) { InitGrid(); lines = 0; gameOver = false; } return; }
+
+        if (isFading) {
+            fadeTimer++;
+            if (fadeTimer > 30) { ClearFullLines(); isFading = false; fadeTimer = 0; }
+            return;
+        }
+
+        if (!pieceActive) {
+            for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) piece[i][j] = nextPiece[i][j];
+            GeneratePiece(nextPiece);
+            posX = (GRID_HORIZONTAL_SIZE - 4) / 2;
+            posY = 0;
+            pieceActive = true;
+            if (WillCollide(posX, posY, piece)) gameOver = true;
+        }
+        else {
+            // 조작
+            if (IsKeyPressed(KEY_LEFT) && !WillCollide(posX - 1, posY, piece)) posX--;
+            if (IsKeyPressed(KEY_RIGHT) && !WillCollide(posX + 1, posY, piece)) posX++;
+            if (IsKeyPressed(KEY_UP)) {
+                GridSquare rotated[4][4];
+                for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) rotated[i][j] = piece[j][3 - i];
+                if (!WillCollide(posX, posY, rotated)) {
+                    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) piece[i][j] = rotated[i][j];
+                }
+            }
+
+            // 하락
+            gravityCounter++;
+            int speed = IsKeyDown(KEY_DOWN) ? 2 : GRAVITY_SPEED;
+            if (gravityCounter >= speed) {
+                if (!WillCollide(posX, posY + 1, piece)) {
+                    posY++;
+                }
+                else {
+                    LockPiece(); // 바닥 충돌 시 고정!
+                }
+                gravityCounter = 0;
+            }
+        }
+    }
+
+    void Draw() {
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+
+        int ox = GetScreenWidth() / 2 - 120;
+        int oy = 30;
+
+        // 1. 고정된 블록들 그리기 (Grid 중심)
+        for (int i = 0; i < GRID_HORIZONTAL_SIZE; i++) {
+            for (int j = 0; j < GRID_VERTICAL_SIZE; j++) {
+                Rectangle r = { (float)ox + i * 20, (float)oy + j * 20, 20, 20 };
+                if (grid[i][j] == GridSquare::BLOCK) DrawRectangleRec(r, LIGHTGRAY);
+                else if (grid[i][j] == GridSquare::FULL) DrawRectangleRec(r, GRAY);
+                else if (grid[i][j] == GridSquare::FADING) DrawRectangleRec(r, (fadeTimer % 4 < 2) ? MAROON : RAYWHITE);
+                DrawRectangleLinesEx(r, 0.5f, Fade(LIGHTGRAY, 0.5f));
+            }
+        }
+
+        // 2. 움직이는 블록 그리기 (그리드와 별개로 좌표값으로 그림)
+        if (pieceActive && !gameOver) {
+            for (int i = 0; i < 4; i++) {
+                for (int j = 0; j < 4; j++) {
+                    if (piece[i][j] == GridSquare::MOVING) {
+                        DrawRectangle(ox + (posX + i) * 20, oy + (posY + j) * 20, 20, 20, DARKGRAY);
+                    }
+                }
+            }
+        }
+
+        DrawText(TextFormat("LINES: %d", lines), 550, 100, 20, DARKGRAY);
+        if (gameOver) DrawText("GAME OVER\n[ENTER] TO RESTART", 320, 200, 20, MAROON);
+        EndDrawing();
+    }
+};
+
+int main() {
+    TetrisGame game;
+    while (!WindowShouldClose()) {
+        game.Update();
+        game.Draw();
+    }
+    CloseWindow();
+    return 0;
+}
